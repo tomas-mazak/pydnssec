@@ -1,4 +1,4 @@
-pydnssec
+PyDNSSEC
 ========
 
 DNSSEC toolkit for Python
