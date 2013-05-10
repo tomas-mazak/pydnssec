@@ -35,6 +35,7 @@ EXAMPLES
 --------
 
 Key generation and exporting to DNSSEC private key files:
+
 	from dns import zone
 	import os
 	import dnssec
@@ -52,11 +53,13 @@ Key generation and exporting to DNSSEC private key files:
 	zsk.to_file('example.com', os.path.dirname(__file__))
 
 Zone signing:
+
 	z = zone.from_file('example.com.zone', origin='example.com.')
 	dnssec.sign_zone(z, [ksk, zsk])
 	z.to_file('example.com.signed', relativize=False)
 
 Zone unsigning (removes all DNSSEC specific resource records from it):
+
 	dnssec.unsign_zone(z) 
 	z.to_file('example.com.unsigned', relativize=False)
 
