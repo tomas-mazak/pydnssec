@@ -69,6 +69,7 @@ INSTALLATION
 
 The module is packed using distutils, so it can be easily installed by running
 following command from the package directory:
+
 	python setup.py install
 
 __PyCrypto__ and __dnspython__ packages are required by PyDNSSEC.
