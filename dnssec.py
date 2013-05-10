@@ -1,5 +1,3 @@
-# Copyright (C) 2003-2007, 2009, 2011 Nominum, Inc.
-#
 # PyDNSSEC - DNSSEC toolkit
 # Copyright (C) 2013 Tomas Mazak
 # (based on dnssec module from dnspython package)
@@ -59,6 +57,9 @@ class ValidationFailure(dns.exception.DNSException):
     """The DNSSEC signature is invalid."""
     pass
 
+class NSEC3Collision(dns.exception.DNSException):
+    """Collision was detected in hashed owner names."""
+    pass
 
 # DNSSEC algorithm numbers, according to IANA authority
 # http://www.iana.org/assignments/dns-sec-alg-numbers/dns-sec-alg-numbers.xml
@@ -308,13 +309,12 @@ def _canonical_order(names, origin = None):
         for i in range(min(len(n1), len(n2))):
             i1 = len(n1) - i - 1
             i2 = len(n2) - i - 1
-            if cmp(n1.labels[i1], n2.labels[i2]) != 0:
-                return cmp(n1.labels[i1], n2.labels[i2])
+            if cmp(n1.labels[i1].lower(), n2.labels[i2].lower()) != 0:
+                return cmp(n1.labels[i1].lower(), n2.labels[i2].lower())
         return cmp(len(n1), len(n2))
     
     if origin:
         names = [n.derelativize(origin) for n in names]
-    names = [n.canonicalize() for n in names]
     return sorted(names, cmp=labelCmp)
 
 
@@ -331,7 +331,7 @@ def _hashed_order(names, origin=None, salt='', iterations=0):
         n = name.relativize(origin)
         while len(n) > 1:
             n = n.parent()
-            nameset.add(n)
+            nameset.add(n.derelativize(origin))
     names = list(nameset)
 
     ret = []
@@ -345,6 +345,11 @@ def _hashed_order(names, origin=None, salt='', iterations=0):
             h = sha.digest()
             i -= 1
         ret.append((name, h))
+
+    # Check for hash collision
+    if len(ret) != len(set(ret)):
+        raise NSEC3Collision()
+
     ret = sorted(ret, key=lambda x: x[1])
     return ret
 
@@ -412,22 +417,37 @@ def add_nsec(zone):
         rdataset.add(nsec, ttl=ttl)
 
 
-def add_nsec3(zone):
+def add_nsec3(zone, salt=None, iters=None):
     """
     Add appropriate NSEC3 records to the given zone. The NSEC3PARAM record 
     is added as well. (see RFC-5155 for details)
     """
     # For NSEC3 purposes, 8 octets long salt is used and fixed number of
     # iterations - 10. As this configuration is used by CZ.NIC, it's considered
-    # to be secure enough. 
-    salt = '' #os.urandom(8)
-    iters = 1 #10
+    # to be secure enough.
+    can_resalt=False
+    if salt is None:
+        salt = os.urandom(8)
+        can_resalt = True
+    if iters is None:
+        iters = 10
 
     # Only add NSEC records to owner names containing authoritative data or
     # zone delegations
     delegs = _get_delegations(zone)
     names = list(set(delegs + _get_authoritative(zone)))
-    hashed_names = _hashed_order(names, zone.origin, salt, iters)
+
+    # If a collision occurs (two names with the same hash - EXTREMLY low
+    # probability), change the salt and try again. 
+    while True:
+        try:
+            hashed_names = _hashed_order(names, zone.origin, salt, iters)
+            break
+        except NSEC3Collision as collision:
+            if not can_resalt:
+                raise collision
+            salt = os.urandom(8)
+            continue
 
     # Add NSEC3PARAM resource record
     ttl = _get_minimum_ttl(zone)
@@ -455,7 +475,7 @@ def add_nsec3(zone):
         # Convert hashed name to DNSSEC's strange base32 encoding
         b32hash = base64.b32encode(hashed)
         b32hash = b32hash.translate(dns.rdtypes.ANY.NSEC3.b32_normal_to_hex)
-        owner = dns.name.Name((b32hash.lower(),))
+        owner = dns.name.Name((b32hash.lower(),)).derelativize(zone.origin)
 
         rdataset = zone.find_rdataset(owner, rdtype=dns.rdatatype.NSEC3, 
                                       create=True)
@@ -699,7 +719,7 @@ def sign_rrset(rrset, key, origin, expiration, inception):
 
 
 def sign_zone(zone, keys, expiration=None, inception=None, nsec3=False,
-               keyttl=3600):
+               keyttl=3600, nsec3salt=None, nsec3iters=None):
     """
     Given dnspython zone instance and uNIC KSK and ZSK keys to be used,
     sign the zone with DNSSEC
@@ -713,17 +733,17 @@ def sign_zone(zone, keys, expiration=None, inception=None, nsec3=False,
     if inception is None:
         inception = time.time() - (3600 * 24) # 1 day ago
 
-    # Add NSEC / NSEC3 RRs
-    if nsec3:
-        add_nsec3(zone)
-    else:
-        add_nsec(zone)
-
     # Add DNSKEY records to the zone 
     dnskey_set = zone.find_rdataset(zone.origin, rdtype=dns.rdatatype.DNSKEY, 
                                     create=True)
     for key in keys:
         dnskey_set.add(key.get_pubkey(), ttl=keyttl)
+
+    # Add NSEC / NSEC3 RRs
+    if nsec3:
+        add_nsec3(zone, nsec3salt, nsec3iters)
+    else:
+        add_nsec(zone)
 
     # Sign the DNSKEY records with all keys
     rrsig_set = zone.find_rdataset(zone.origin, rdtype=dns.rdatatype.RRSIG, 
@@ -780,9 +800,7 @@ def unsign_zone(zone):
 
     # Remove NSEC/NSEC3
     for rrname, rdataset in zone.iterate_rdatasets():
-        print "Iterating %s: %d..." % (rrname, rdataset.rdtype)
         if rdataset.rdtype in (dns.rdatatype.NSEC, dns.rdatatype.NSEC3):
-            print "Removing %d..." % rdataset.rdtype
             zone.delete_rdataset(rrname, rdtype=rdataset.rdtype)
 
     # Remove NSEC3PARAM
@@ -818,6 +836,18 @@ def _dnskey2rsa(keyptr):
     rsa_n = keyptr[b:]
     return (rsa_e, rsa_n)
 
+_file_privkey_rsa = \
+"""Private-key-format: v1.2
+Algorithm: %(alg)d (%(algtxt)s)
+Modulus: %(n)s
+PublicExponent: %(e)s
+PrivateExponent: %(d)s
+Prime1: %(p)s
+Prime2: %(q)s
+Exponent1: %(dmp1)s
+Exponent2: %(dmq1)s
+Coefficient: %(u)s
+"""
 
 class PrivateDNSKEY(dns.rdtypes.ANY.DNSKEY.DNSKEY):
     """
@@ -827,8 +857,26 @@ class PrivateDNSKEY(dns.rdtypes.ANY.DNSKEY.DNSKEY):
     @ivar privkey: the private key 
     @type flags: string
     """
+    
+    @classmethod
+    def generate(cls, flags, algorithm, bits=None, rdclass=dns.rdataclass.IN,
+                 rdtype=dns.rdatatype.DNSKEY, protocol=3):
+        """
+        Generate a new DNSKEY keypair
+        """
+        if _is_rsa(algorithm):
+            if not isinstance(bits, (int, long)):
+                raise ValidationFailure("For RSA key generation, key size in "
+                                        "bits must be provided")
+            key = Crypto.PublicKey.RSA.generate(bits)
+            private = key.exportKey(format='PEM')
+            public = _rsa2dnskey(key)
+        else:
+            raise ValidationFailure("Unknown algorithm %d" % algorithm)
 
-    def __init__(self, flags, algorithm, key, privkey=None, 
+        return cls(flags, algorithm, public, private, rdclass, rdtype,protocol)
+
+    def __init__(self, flags, algorithm, key, privkey=None,
                  rdclass=dns.rdataclass.IN, rdtype=dns.rdatatype.DNSKEY, 
                  protocol=3):
         super(PrivateDNSKEY, self).__init__(rdclass, rdtype, flags, protocol,
@@ -859,25 +907,36 @@ class PrivateDNSKEY(dns.rdtypes.ANY.DNSKEY.DNSKEY):
             (rsa_e,rsa_n) = _dnskey2rsa(self.key)
             return len(rsa_n)*8
         else:
-            raise ValidationFailure("Unknown algorithm %d" % algorithm)
+            raise ValidationFailure("Unknown algorithm %d" % self.algorithm)
 
+    def to_file(self, domain, directory=None, file=None):
+        """
+        Export this key to a private key file compatible with bind tools
+        """
+        if not _is_rsa(self.algorithm):
+            raise ValidationFailure("Unknown algorithm %d" % self.algorithm)
 
-    def generate(cls, flags, algorithm, bits=None, rdclass=dns.rdataclass.IN,
-                 rdtype=dns.rdatatype.DNSKEY, protocol=3):
-        """
-        Generate a new DNSKEY keypair
-        """
-        if _is_rsa(algorithm):
-            if not isinstance(bits, (int, long)):
-                raise ValidationFailure("For RSA key generation, key size in "
-                                        "bits must be provided")
-            key = Crypto.PublicKey.RSA.generate(bits)
-            private = key.exportKey(format='PEM')
-            public = _rsa2dnskey(key)
+        # Prepare key data
+        key = Crypto.PublicKey.RSA.importKey(self.privkey)
+        keydata = dict(alg=self.algorithm,
+                       algtxt=algorithm_to_text(self.algorithm))
+        for field in key.keydata:
+            f = getattr(key, field)
+            f = Crypto.Util.number.long_to_bytes(f)
+            keydata[field] = base64.b64encode(f)
+        dmp1 = Crypto.Util.number.long_to_bytes(key.d % (key.p - 1))
+        keydata['dmp1'] = base64.b64encode(dmp1)
+        dmq1 = Crypto.Util.number.long_to_bytes(key.d % (key.p - 1))
+        keydata['dmq1'] = base64.b64encode(dmq1)
+
+        # Write to file
+        if file:
+            fname = file
         else:
-            raise ValidationFailure("Unknown algorithm %d" % algorithm)
-        
-        return cls(flags, algorithm, public, private, rdclass, rdtype,protocol)
-    
-    generate = classmethod(generate)
-
+            fname = 'K%s.+%03d+%05d.private' % (domain.strip('.'), 
+                                                self.algorithm, self.key_tag())
+            if directory:
+                fname = "%s/%s" % (directory, fname)
+        fd = open(fname, 'w')
+        fd.write(_file_privkey_rsa % keydata)
+        fd.close()
