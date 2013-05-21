@@ -792,14 +792,18 @@ def unsign_zone(zone):
     """
     Remove all DNSSEC records from the given zone 
     """
+    rdatasets = []
+    for item in zone.iterate_rdatasets():
+        rdatasets.append(item)
+
     # Remove signatures
-    for rrname, rdataset in zone.iterate_rdatasets():
+    for rrname, rdataset in rdatasets:
         if rdataset.rdtype != dns.rdatatype.RRSIG:
             zone.delete_rdataset(rrname, rdtype=dns.rdatatype.RRSIG, 
                                  covers=rdataset.rdtype)
 
     # Remove NSEC/NSEC3
-    for rrname, rdataset in zone.iterate_rdatasets():
+    for rrname, rdataset in rdatasets:
         if rdataset.rdtype in (dns.rdatatype.NSEC, dns.rdatatype.NSEC3):
             zone.delete_rdataset(rrname, rdtype=rdataset.rdtype)
 

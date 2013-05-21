@@ -673,5 +673,13 @@ class DNSSECSignerTestCase(unittest.TestCase):
         self._diff(zone, signedzone)
         self.assertEqual(zone, signedzone)
 
+    def test_unsign_zone(self):
+        zone = dns.zone.from_text(zone_orig_txt, relativize=False)
+        signedzone = dns.zone.from_text(zone_rsasha512_txt,                     
+                                        relativize=False)
+        unsignedzone = dnssec.unsign_zone(signedzone)
+        self.assertEqual(zone, unsignedzone)
+
+
 if __name__ == '__main__':
     unittest.main()
