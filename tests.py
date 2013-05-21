@@ -586,7 +586,20 @@ rsa_pub = "AwEAAbwPwkos3jZeAODOzW6AE0qf2ezpSEK6x7VAU2gMVTWAjN9IlkQAmxcNfB"\
 ### }}}
 
 class DNSSECSignerTestCase(unittest.TestCase):
-    def diff(self, zone1, zone2):
+    def _nsec3fix(self, zone):
+        """
+        Older versions of DNSpython have a bug in NSEC3 from_text routine.
+        In order to run tests successfully with older DNSpython, we
+        need to fix automatically loaded NSEC3s.
+        """
+        for name, rdataset in zone.iterate_rdatasets():
+            if rdataset.rdtype != dns.rdatatype.NSEC3:
+                continue
+            for rdata in rdataset:
+                if rdata.windows == [(0, '')]:
+                    rdata.windows = []
+
+    def _diff(self, zone1, zone2):
         for name in zone1.nodes:
             if zone1.nodes[name] != zone2.nodes[name]:
                 print " ======> DIFFERENCE IN NODE", name 
@@ -621,6 +634,7 @@ class DNSSECSignerTestCase(unittest.TestCase):
         dnssec.sign_zone(zone, [self.rsasha1], self.expiration, self.inception, 
                          nsec3=False, keyttl=3600)
         signedzone = dns.zone.from_text(zone_rsasha1_txt, relativize=False)
+        self._diff(zone, signedzone)
         self.assertEqual(zone, signedzone)
 
     def testRSASHA1NSEC3SHA1(self):
@@ -631,6 +645,8 @@ class DNSSECSignerTestCase(unittest.TestCase):
                          nsec3iters=10)
         signedzone = dns.zone.from_text(zone_rsasha1nsec3sha1_txt, 
                                         relativize=False)
+        self._nsec3fix(signedzone)
+        self._diff(zone, signedzone)
         self.assertEqual(zone, signedzone)
 
     def testRSASHA256(self):
@@ -641,7 +657,8 @@ class DNSSECSignerTestCase(unittest.TestCase):
                          nsec3iters=10)
         signedzone = dns.zone.from_text(zone_rsasha256_txt, 
                                         relativize=False)
-        self.diff(zone, signedzone)
+        self._nsec3fix(signedzone)
+        self._diff(zone, signedzone)
         self.assertEqual(zone, signedzone)
 
     def testRSASHA512(self):
@@ -652,7 +669,8 @@ class DNSSECSignerTestCase(unittest.TestCase):
                          nsec3iters=10)
         signedzone = dns.zone.from_text(zone_rsasha512_txt, 
                                         relativize=False)
-        self.diff(zone, signedzone)
+        self._nsec3fix(signedzone)
+        self._diff(zone, signedzone)
         self.assertEqual(zone, signedzone)
 
 if __name__ == '__main__':
