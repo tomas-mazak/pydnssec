@@ -1,0 +1,15 @@
+Source: python-dnssec
+Section: apps
+Priority: extra
+Maintainer: Tomas Mazak <tomas.mazak@centrumholdings.com>
+Build-Depends: debhelper (>= 8.0.0), python (>=2.6), python-setuptools
+Standards-Version: 3.9.3
+X-Python-Version: >= 2.6
+
+Package: python-dnssec
+Architecture: all
+Depends: ${misc:Depends}, ${python:Depends}, python (>=2.6), python (<<3),
+  python-crypto (>=2.6), python-dnspython (>=1.10.0)
+Description: DNSSEC toolkit for Python
+ DNSSEC toolkit for Python. Provides methods for zone signing and signature verification. Based on dnspython.
+

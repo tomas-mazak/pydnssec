@@ -1,0 +1,5 @@
+python-dnssec (1.0) stable; urgency=low
+
+  * Initial release.
+
+ -- Tomas Mazak <tomas.mazak@centrumholdings.com>  Fri, 10 May 2013 08:38:36 +0200
