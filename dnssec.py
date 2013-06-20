@@ -788,6 +788,14 @@ def sigs_expire_before(zone, limit):
     return False
 
 
+def signed(zone):
+    """
+    Test if a zone is signed. Currently, it only checks if there are any DNSKEY
+    records in zone.
+    """
+    return (zone.get_rdataset(zone.origin, dns.rdatatype.DNSKEY) != None)
+
+
 def unsign_zone(zone):
     """
     Remove all DNSSEC records from the given zone 
